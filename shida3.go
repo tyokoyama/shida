@@ -9,6 +9,7 @@ import (
 	"math/rand"
 	"os"
 	"runtime"
+	"sync"
 	"time"
 )
 
@@ -62,45 +63,42 @@ func W4y(x, y float64) float64 {
 	return 0.175337 * y
 }
 
-func f(m *image.RGBA, k int, x, y float64, r *rand.Rand, ch chan<- int) {
+var mutex sync.Mutex
+
+func f(m *image.RGBA, k int, x, y float64, r *rand.Rand) {
 	if 0 < k {
-		chMap := make(map[int]chan int)
-		chTarget := make(chan int)
+		ch1 := make(chan int)
+		ch2 := make(chan int)
 
-		// 必ず通るものは毎回待つ。
-		go f(m, k-1, W1x(x, y), W1y(x, y), r, chTarget)
-		<-chTarget
-		if r.Float64() < 0.3 {
-			ch1 := make(chan int)
-			go f(m, k-1, W2x(x, y), W2y(x, y), r, ch1)
-			chMap[1] = ch1
-		}
-		if r.Float64() < 0.3 {
-			ch2 := make(chan int)
-			go f(m, k-1, W2x(x, y), W2y(x, y), r, ch2)
-			chMap[2] = ch2
-		}
-		if r.Float64() < 0.3 {
-			ch3 := make(chan int)
-			go f(m, k-1, W3x(x, y), W3y(x, y), r, ch3)
-			chMap[3] = ch3
-		}
-		if r.Float64() < 0.3 {
-			ch4 := make(chan int)
-			go f(m, k-1, W4x(x, y), W4y(x, y), r, ch4)
-			chMap[4] = ch4
-		}
+		go func(ch chan<- int) {
+			f(m, k-1, W1x(x, y), W1y(x, y), r)
+			ch <- 1
+		}(ch1)
 
-		for _, current := range chMap {
-			<-current
-		}
+		go func(ch chan<- int) {
+			mutex.Lock()
+			if r.Float64() < 0.3 {
+				go f(m, k-1, W2x(x, y), W2y(x, y), r)
+			}
+			if r.Float64() < 0.3 {
+				go f(m, k-1, W2x(x, y), W2y(x, y), r)
+			}
+			if r.Float64() < 0.3 {
+				go f(m, k-1, W3x(x, y), W3y(x, y), r)
+			}
+			if r.Float64() < 0.3 {
+				go f(m, k-1, W4x(x, y), W4y(x, y), r)
+			}
+			mutex.Unlock()
+			ch <- 2
+		}(ch2)
+
+		<-ch1
+		<-ch2
+
 	} else {
 		var s float64 = 490.0
 		m.Set(int(x*s+float64(width)*0.5), int(float64(height)-y*s), linecolor)
-	}
-
-	if ch != nil {
-		ch <- 1
 	}
 }
 
@@ -111,10 +109,7 @@ func main() {
 	m := image.NewRGBA(image.Rect(0, 0, width, height))
 	draw.Draw(m, m.Bounds(), &image.Uniform{bgcolor}, image.ZP, draw.Src)
 
-	ch := make(chan int)
-	go f(m, N, 0, 0, rand.New(src), ch)
-
-	<-ch
+	f(m, N, 0, 0, rand.New(src))
 
 	f, err := os.Create(filename)
 	if err != nil {
